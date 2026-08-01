@@ -1,0 +1,46 @@
+# Web / API
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+httpx==0.28.1
+
+# Telegram — needs pydantic<2.10 for 3.15.x; 3.17+ supports newer pydantic
+aiogram==3.17.0
+
+# Config / validation
+pydantic==2.10.4
+pydantic-settings==2.7.0
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+pgvector==0.3.6
+
+# Cache / rate limit
+redis==5.2.1
+
+# LLM / RAG
+langchain==0.3.14
+langchain-core==0.3.29
+langchain-community==0.3.14
+langgraph==0.2.60
+google-generativeai==0.8.3
+
+# Documents
+pypdf==5.1.0
+python-docx==1.1.2
+aiofiles==24.1.0
+
+# Voice
+faster-whisper==1.1.0
+openai==1.58.1
+
+# Utils
+python-multipart==0.0.20
+tenacity==9.0.0
+structlog==24.4.0
+orjson==3.10.12
+
+# Tests
+pytest==8.3.4
+pytest-asyncio==0.25.0

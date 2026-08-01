@@ -1,0 +1,10 @@
+[project]
+name = "multi-agent-telegram-bot"
+version = "1.0.0"
+description = "Enterprise multi-agent Telegram bot with On-Prem LLM, RAG, and structured outputs"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
