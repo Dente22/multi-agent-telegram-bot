@@ -88,10 +88,13 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       API_KEYS: ${API_KEYS:-change-me-in-production}
       WHISPER_MODE: ${WHISPER_MODE:-auto}
+      KNOWLEDGE_DIR: /app/knowledge
+      AUTO_INGEST_KNOWLEDGE: ${AUTO_INGEST_KNOWLEDGE:-true}
     ports:
       - "8000:8000"
     volumes:
       - uploads:/app/uploads
+      - ./knowledge:/app/knowledge:ro
     restart: unless-stopped
 
 volumes:

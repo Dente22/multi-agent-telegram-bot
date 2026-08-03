@@ -20,6 +20,7 @@ COPY alembic ./alembic
 COPY alembic.ini .
 COPY scripts ./scripts
 COPY docker ./docker
+COPY knowledge ./knowledge
 
 RUN mkdir -p /app/uploads
 

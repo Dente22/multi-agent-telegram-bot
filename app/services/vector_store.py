@@ -8,6 +8,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.constants import GLOBAL_KB_CHAT_ID
 from app.models.document import Document, DocumentChunk
 from app.schemas.rag import SourceCitation
 from app.services.embeddings import EmbeddingService
@@ -85,6 +86,26 @@ class VectorStore:
         await self.session.flush()
         return doc
 
+    async def delete_by_filename(
+        self,
+        *,
+        filename: str,
+        chat_id: int,
+        owner_user_id: int | None = None,
+    ) -> int:
+        """Delete documents with the same filename in a scope (for re-ingest)."""
+        stmt = select(Document).where(
+            Document.filename == filename,
+            Document.chat_id == chat_id,
+        )
+        if owner_user_id is not None:
+            stmt = stmt.where(Document.owner_user_id == owner_user_id)
+        rows = (await self.session.execute(stmt)).scalars().all()
+        for doc in rows:
+            await self.session.delete(doc)
+        await self.session.flush()
+        return len(rows)
+
     async def similarity_search(
         self,
         *,
@@ -93,12 +114,13 @@ class VectorStore:
         chat_id: int,
         top_k: int | None = None,
         include_personal: bool = True,
+        include_global_kb: bool = True,
     ) -> list[RetrievedChunk]:
         """
-        Search chunks visible in this chat plus the user's personal docs.
-
-        Isolation rule: chat_id match OR (same owner_user_id and same chat for personal).
-        Personal docs are stored with chat_id = user private chat id.
+        Search chunks visible to the user:
+        - current chat docs
+        - personal docs (owner_user_id)
+        - global company knowledge base (chat_id = 0)
         """
         k = top_k or self.settings.rag_top_k
         embedder = self.embedder or EmbeddingService(self.settings)
@@ -117,9 +139,9 @@ class VectorStore:
                 owner_user_id=owner_user_id,
                 chat_id=chat_id,
                 top_k=k,
+                include_global_kb=include_global_kb,
             )
 
-        # Scope: same chat OR personal docs owned by user (their DM chat_id == owner)
         sql = text(
             """
             SELECT c.id, c.document_id, c.content, c.page, d.filename,
@@ -130,6 +152,7 @@ class VectorStore:
               AND (
                     c.chat_id = :chat_id
                  OR (:include_personal AND c.owner_user_id = :uid)
+                 OR (:include_global AND c.chat_id = :global_chat_id)
               )
             ORDER BY c.embedding <=> CAST(:q AS vector)
             LIMIT :k
@@ -143,6 +166,8 @@ class VectorStore:
                     "chat_id": chat_id,
                     "uid": owner_user_id,
                     "include_personal": include_personal,
+                    "include_global": include_global_kb,
+                    "global_chat_id": GLOBAL_KB_CHAT_ID,
                     "k": k,
                 },
             )
@@ -175,14 +200,20 @@ class VectorStore:
         owner_user_id: int,
         chat_id: int,
         top_k: int,
+        include_global_kb: bool = True,
     ) -> list[RetrievedChunk]:
+        conditions = [
+            (DocumentChunk.chat_id == chat_id) | (DocumentChunk.owner_user_id == owner_user_id)
+        ]
+        if include_global_kb:
+            conditions.append(DocumentChunk.chat_id == GLOBAL_KB_CHAT_ID)
+
+        from sqlalchemy import or_
+
         stmt = (
             select(DocumentChunk, Document.filename)
             .join(Document, Document.id == DocumentChunk.document_id)
-            .where(
-                (DocumentChunk.chat_id == chat_id)
-                | (DocumentChunk.owner_user_id == owner_user_id)
-            )
+            .where(or_(*conditions))
             .limit(50)
         )
         rows = (await self.session.execute(stmt)).all()

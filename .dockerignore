@@ -13,6 +13,7 @@ uploads
 data
 *.md
 !README.md
+!knowledge/**/*.md
 tests
 .idea
 .vscode

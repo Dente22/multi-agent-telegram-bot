@@ -18,6 +18,7 @@ from app.core.config import get_settings
 from app.core.database import dispose_db, init_db
 from app.core.logging import get_logger, setup_logging
 from app.core.redis import close_redis
+from app.services.knowledge_ingest import ingest_knowledge_dir
 
 logger = get_logger(__name__)
 
@@ -38,6 +39,13 @@ async def lifespan(app: FastAPI):
 
     await init_db()
     logger.info("database_ready")
+
+    if settings.auto_ingest_knowledge:
+        try:
+            stats = await ingest_knowledge_dir(settings.knowledge_dir, settings=settings)
+            logger.info("knowledge_ready", **stats)
+        except Exception as exc:
+            logger.exception("knowledge_ingest_failed", error=str(exc))
 
     bot: Bot | None = None
     dp: Dispatcher | None = None

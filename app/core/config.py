@@ -68,6 +68,8 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
 
     upload_dir: str = "./uploads"
+    knowledge_dir: str = "./knowledge"
+    auto_ingest_knowledge: bool = True
 
     @field_validator("api_keys", mode="before")
     @classmethod
