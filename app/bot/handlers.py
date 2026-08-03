@@ -79,13 +79,17 @@ Send text or voice — I return structured tasks:
 START_RU = """\
 Привет! Я <b>Multi-Agent Bot</b> для рабочих задач.
 
-<b>Коротко:</b>
-📄 отвечаю по вашим файлам
-✅ вытаскиваю задачи из текста/голоса
-📊 делаю краткие сводки
+<b>Что я делаю (и чего нет):</b>
+📄 <b>/ask</b> — отвечаю по регламентам HR/IT/СБ/бухгалтерии
+✅ <b>/task</b> — разбираю текст на задачу (кто/что/срок) и сохраняю
+📊 <b>/summary</b> — делаю краткую сводку из обновлений
+📋 <b>/tasks</b> — список уже сохранённых задач
 
-Нажмите кнопку ниже или сразу попробуйте:
-<code>/ask ...</code> · <code>/task ...</code> · <code>/summary ...</code>
+Я <b>не выполняю</b> работу за сотрудников — я структурирую и ищу информацию.
+
+Попробуйте:
+<code>/ask Сколько дней отпуска?</code>
+<code>/task Срочно: отчёт к пятнице, исполнитель Ирина</code>
 """
 
 START_EN = """\
@@ -123,19 +127,31 @@ Or just type a question after uploading.
 GUIDE_TASK_RU = """\
 ✅ <b>Извлечь задачи</b>
 
-Напишите так:
-<code>/task Подготовить презентацию к пятнице, исполнитель: Иван, срочно</code>
+Это не «сделать отчёт за вас», а <b>разобрать текст на структуру</b> и сохранить в БД:
+• action_item — что сделать
+• priority — low/medium/high/critical
+• assignee — исполнитель
+• deadline — срок
 
-Или просто опишите задачу обычным текстом / голосом — я разберу на action item, priority, assignee, deadline.
+Пример:
+<code>/task Срочно: подготовить отчёт к пятнице, исполнитель Ирина</code>
+
+Посмотреть сохранённые: <code>/tasks</code>
 """
 
 GUIDE_TASK_EN = """\
 ✅ <b>Extract tasks</b>
 
-Try:
-<code>/task Prepare the deck by Friday, assignee: Ivan, urgent</code>
+I don't "do the work" for you — I <b>parse text into structured fields</b> and save them:
+• action_item
+• priority
+• assignee
+• deadline
 
-Or just describe the task in plain text / voice — I'll parse action item, priority, assignee, deadline.
+Example:
+<code>/task Urgent: prepare the report by Friday, assignee Irina</code>
+
+List saved tasks: <code>/tasks</code>
 """
 
 GUIDE_SUMMARY_RU = """\
@@ -207,30 +223,100 @@ async def cmd_help(message: Message) -> None:
     )
 
 
-@router.message(Command("ask"))
-async def cmd_ask(message: Message, command: CommandObject) -> None:
-    query = (command.args or "").strip()
-    lang = _lang_from_message(message, query)
-    if not query:
-        await message.answer(
-            "Использование: /ask <вопрос>" if lang.startswith("ru") else "Usage: /ask <question>"
-        )
-        return
-    await _dispatch_command("ask", query, message, lang)
-
-
 @router.message(Command("task"))
 async def cmd_task(message: Message, command: CommandObject) -> None:
     payload = (command.args or "").strip()
     lang = _lang_from_message(message, payload)
     if not payload:
         await message.answer(
-            "Использование: /task <текст задачи>"
+            "Напишите задачу после команды, например:\n"
+            "<code>/task Срочно: подготовить отчёт к пятнице, исполнитель Ирина</code>\n\n"
+            "Я извлеку: что сделать, приоритет, исполнителя, срок — и сохраню в БД."
             if lang.startswith("ru")
-            else "Usage: /task <task text>"
+            else "Write a task after the command, e.g.\n"
+            "<code>/task Urgent: prepare the report by Friday, assignee Irina</code>"
         )
         return
+    wait = await message.answer(
+        "⏳ Разбираю задачу (это может занять до минуты)…"
+        if lang.startswith("ru")
+        else "⏳ Parsing task (may take up to a minute)…"
+    )
     await _dispatch_command("task", payload, message, lang)
+    try:
+        await wait.delete()
+    except Exception:
+        pass
+
+
+@router.message(Command("tasks"))
+async def cmd_tasks(message: Message) -> None:
+    """List recently saved tasks for this chat."""
+    lang = _lang_from_message(message)
+    assert message.from_user is not None
+    from sqlalchemy import select
+
+    from app.models.task import TaskRecord
+
+    session = await _session()
+    async with session:
+        rows = (
+            await session.execute(
+                select(TaskRecord)
+                .where(TaskRecord.chat_id == message.chat.id)
+                .order_by(TaskRecord.id.desc())
+                .limit(10)
+            )
+        ).scalars().all()
+
+    if not rows:
+        await message.answer(
+            "Пока нет сохранённых задач. Создайте через /task …"
+            if lang.startswith("ru")
+            else "No saved tasks yet. Create one with /task …"
+        )
+        return
+
+    if lang.startswith("ru"):
+        lines = ["📋 <b>Последние задачи в этом чате</b>", ""]
+        for i, row in enumerate(rows, start=1):
+            deadline = row.deadline.isoformat() if row.deadline else "—"
+            lines.append(
+                f"{i}. [{row.priority}] {row.action_item}\n"
+                f"   → {row.assignee or '—'} | {deadline}"
+            )
+    else:
+        lines = ["📋 <b>Recent tasks in this chat</b>", ""]
+        for i, row in enumerate(rows, start=1):
+            deadline = row.deadline.isoformat() if row.deadline else "—"
+            lines.append(
+                f"{i}. [{row.priority}] {row.action_item}\n"
+                f"   → {row.assignee or '—'} | {deadline}"
+            )
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("ask"))
+async def cmd_ask(message: Message, command: CommandObject) -> None:
+    query = (command.args or "").strip()
+    lang = _lang_from_message(message, query)
+    if not query:
+        await message.answer(
+            "Использование: /ask <вопрос>\nПример: <code>/ask Сколько дней отпуска?</code>"
+            if lang.startswith("ru")
+            else "Usage: /ask <question>"
+        )
+        return
+    wait = await message.answer(
+        "⏳ Ищу ответ в базе знаний…"
+        if lang.startswith("ru")
+        else "⏳ Searching the knowledge base…"
+    )
+    await _dispatch_command("ask", query, message, lang)
+    try:
+        await wait.delete()
+    except Exception:
+        pass
 
 
 @router.message(Command("summary"))
@@ -244,7 +330,14 @@ async def cmd_summary(message: Message, command: CommandObject) -> None:
             else "Usage: /summary <updates>"
         )
         return
+    wait = await message.answer(
+        "⏳ Готовлю сводку…" if lang.startswith("ru") else "⏳ Preparing summary…"
+    )
     await _dispatch_command("summary", payload, message, lang)
+    try:
+        await wait.delete()
+    except Exception:
+        pass
 
 
 @router.message(F.voice | F.audio)

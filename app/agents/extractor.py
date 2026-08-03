@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import sanitize_output, sanitize_user_text
 from app.models.task import TaskRecord
 from app.schemas.tasks import TASK_JSON_SCHEMA_HINT, TaskExtractionResult
+from app.services.dates import normalize_deadline
 from app.services.llm_engine import LLMEngine
 
-EXTRACTOR_SYSTEM = f"""You are an enterprise task extraction agent.
+
+def _extractor_system() -> str:
+    today = date.today().isoformat()
+    return f"""You are an enterprise task extraction agent.
+Today's date is {today} (use this for relative deadlines).
 Parse employee messages (text or transcribed voice) into structured tasks.
 Return ONLY valid JSON matching this schema:
 {TASK_JSON_SCHEMA_HINT}
@@ -17,7 +24,10 @@ Return ONLY valid JSON matching this schema:
 Rules:
 - Extract ALL actionable tasks from the message (array may be empty).
 - priority must be one of: low, medium, high, critical.
+- If text says "срочно/urgent/asap" → priority high or critical.
 - deadline must be YYYY-MM-DD or null.
+- Relative dates: "сегодня/today", "завтра/tomorrow", "пятница/Friday" → compute from today ({today}).
+- Never invent past years. Deadlines must be today or in the future unless the text explicitly says a past date.
 - assignee is a person name/username or null.
 - Do not invent facts that are not implied by the text.
 - No markdown fences.
@@ -41,7 +51,11 @@ class TaskExtractorAgent:
     ) -> TaskExtractionResult:
         """Extract and optionally persist structured tasks."""
         cleaned = sanitize_user_text(raw_text, field_name="message")
-        user_prompt = f"Message:\n{cleaned}\n\nReturn the JSON task extraction now."
+        user_prompt = (
+            f"Today: {date.today().isoformat()}\n"
+            f"Message:\n{cleaned}\n\n"
+            "Return the JSON task extraction now."
+        )
 
         owns_llm = self.llm is None
         llm = self.llm or LLMEngine()
@@ -49,7 +63,7 @@ class TaskExtractorAgent:
             await llm.__aenter__()
         try:
             result, _provider, _model, _retries = await llm.structured(
-                system=EXTRACTOR_SYSTEM,
+                system=_extractor_system(),
                 user=user_prompt,
                 schema=TaskExtractionResult,
             )
@@ -57,11 +71,11 @@ class TaskExtractorAgent:
             if owns_llm:
                 await llm.__aexit__(None, None, None)
 
-        # Sanitize string fields
         for task in result.tasks:
             task.action_item = sanitize_output(task.action_item)
             if task.notes:
                 task.notes = sanitize_output(task.notes)
+            task.deadline = normalize_deadline(task.deadline, cleaned)
 
         if persist and session is not None and source_user_id is not None and chat_id is not None:
             for task in result.tasks:
@@ -90,15 +104,54 @@ class TaskExtractorAgent:
                 else "No actionable tasks found."
             )
 
-        lines: list[str] = []
-        header = "Извлечённые задачи:" if lang.startswith("ru") else "Extracted tasks:"
-        lines.append(header)
-        for i, task in enumerate(result.tasks, start=1):
-            deadline = task.deadline.isoformat() if task.deadline else "—"
-            assignee = task.assignee or "—"
-            lines.append(
-                f"{i}. [{task.priority.value}] {task.action_item}\n"
-                f"   → {assignee} | {deadline}"
+        if lang.startswith("ru"):
+            lines = [
+                "✅ <b>Задача разобрана и сохранена</b>",
+                "",
+                "Это режим <b>/task</b>: я превращаю текст в структуру "
+                "(что сделать / приоритет / кто / срок) и пишу в базу.",
+                "",
+            ]
+            for i, task in enumerate(result.tasks, start=1):
+                deadline = task.deadline.isoformat() if task.deadline else "не указан"
+                assignee = task.assignee or "не назначен"
+                lines.append(
+                    f"<b>{i}. {task.action_item}</b>\n"
+                    f"• приоритет: <code>{task.priority.value}</code>\n"
+                    f"• исполнитель: {assignee}\n"
+                    f"• срок: {deadline}"
+                )
+            lines.extend(
+                [
+                    "",
+                    f"Уверенность: {result.confidence:.0%}",
+                    "Список сохранённых: /tasks",
+                    "Спросить по регламентам: /ask …",
+                ]
             )
-        lines.append(f"confidence: {result.confidence:.2f}")
+        else:
+            lines = [
+                "✅ <b>Task parsed and saved</b>",
+                "",
+                "This is <b>/task</b> mode: I turn text into structured fields "
+                "(action / priority / assignee / deadline) and store them.",
+                "",
+            ]
+            for i, task in enumerate(result.tasks, start=1):
+                deadline = task.deadline.isoformat() if task.deadline else "n/a"
+                assignee = task.assignee or "unassigned"
+                lines.append(
+                    f"<b>{i}. {task.action_item}</b>\n"
+                    f"• priority: <code>{task.priority.value}</code>\n"
+                    f"• assignee: {assignee}\n"
+                    f"• deadline: {deadline}"
+                )
+            lines.extend(
+                [
+                    "",
+                    f"Confidence: {result.confidence:.0%}",
+                    "Saved list: /tasks",
+                    "Ask policies: /ask …",
+                ]
+            )
         return "\n".join(lines)

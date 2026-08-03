@@ -13,6 +13,12 @@ def mock_chat_completion(*, system: str, user: str, json_mode: bool) -> str:
 
     if json_mode and ("task" in lowered or "action_item" in lowered or "extract" in lowered):
         deadline = (date.today() + timedelta(days=3)).isoformat()
+        # Prefer relative weekday if mentioned
+        from app.services.dates import infer_deadline_from_text
+
+        inferred = infer_deadline_from_text(user)
+        if inferred:
+            deadline = inferred.isoformat()
         payload = {
             "tasks": [
                 {
