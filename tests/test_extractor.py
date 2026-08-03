@@ -22,4 +22,5 @@ async def test_extractor_returns_validated_tasks(monkeypatch):
 
     assert result.tasks
     text = TaskExtractorAgent.format_for_telegram(result, lang="ru")
-    assert "Извлечённые задачи" in text
+    assert "Задача разобрана и сохранена" in text
+    assert "/tasks" in text

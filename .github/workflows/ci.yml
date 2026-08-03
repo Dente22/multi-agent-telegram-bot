@@ -23,4 +23,5 @@ jobs:
           USE_MOCKS: "true"
           LLM_PROVIDER: mock
           WHISPER_MODE: mock
+          PYTHONPATH: "."
         run: pytest -q
